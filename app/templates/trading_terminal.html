@@ -569,7 +569,7 @@
         var day = ist.getDay(); 
         if (day === 0 || day === 6) return false; 
         var timeInMinutes = ist.getHours() * 60 + ist.getMinutes();
-        return timeInMinutes >= (9 * 60 + 15) && timeInMinutes < (15 * 60 + 30);
+        return timeInMinutes >= (9 * 60 + 15) && timeInMinutes < (15 * 60 + 40);
     }
 
     async function pollPrices() {
@@ -600,37 +600,45 @@
                     var statPrice = document.getElementById('status-price');
                     if(statPrice) statPrice.innerText = p.mid.toFixed(2);
                     
-                    if (typeof lwSeries !== 'undefined' && lwSeries && lastLwCandle) {
-                        var now = Math.floor(Date.now() / 1000);
-                        if (now - lastLwCandle.time >= 60) {
-                            lastLwCandle = {time: now - (now % 60), open: p.mid, high: p.mid, low: p.mid, close: p.mid};
-                            lwSeries.update(lastLwCandle);
-                        } else {
-                            lastLwCandle.close = p.mid;
-                            lastLwCandle.high = Math.max(lastLwCandle.high, p.mid);
-                            lastLwCandle.low = Math.min(lastLwCandle.low, p.mid);
-                            lwSeries.update(lastLwCandle);
+                    // Only create/update chart candles when market is open (including CAS until 15:40)
+                    if (isIndianMarketOpen()) {
+                        if (typeof lwSeries !== 'undefined' && lwSeries && lastLwCandle) {
+                            var now = Math.floor(Date.now() / 1000);
+                            if (now - lastLwCandle.time >= 60) {
+                                lastLwCandle = {time: now - (now % 60), open: p.mid, high: p.mid, low: p.mid, close: p.mid};
+                                lwSeries.update(lastLwCandle);
+                            } else {
+                                lastLwCandle.close = p.mid;
+                                lastLwCandle.high = Math.max(lastLwCandle.high, p.mid);
+                                lastLwCandle.low = Math.min(lastLwCandle.low, p.mid);
+                                lwSeries.update(lastLwCandle);
+                            }
                         }
                     }
-                }
-                
-                // Update Dual Chart if open and symbol matches BankNifty
-                if (isDualChart && p.symbol === 'BANKNIFTY') {
-                    if (typeof lwSeries2 !== 'undefined' && lwSeries2 && lastLwCandle2) {
-                        var now2 = Math.floor(Date.now() / 1000);
-                        if (now2 - lastLwCandle2.time >= 60) {
-                            lastLwCandle2 = {time: now2 - (now2 % 60), open: p.mid, high: p.mid, low: p.mid, close: p.mid};
-                            lwSeries2.update(lastLwCandle2);
-                        } else {
-                            lastLwCandle2.close = p.mid;
-                            lastLwCandle2.high = Math.max(lastLwCandle2.high, p.mid);
-                            lastLwCandle2.low = Math.min(lastLwCandle2.low, p.mid);
-                            lwSeries2.update(lastLwCandle2);
+                    
+                    // Update Dual Chart if open and symbol matches BankNifty
+                    if (isDualChart && p.symbol === 'BANKNIFTY') {
+                        if (isIndianMarketOpen()) {
+                            if (typeof lwSeries2 !== 'undefined' && lwSeries2 && lastLwCandle2) {
+                                var now2 = Math.floor(Date.now() / 1000);
+                                if (now2 - lastLwCandle2.time >= 60) {
+                                    lastLwCandle2 = {time: now2 - (now2 % 60), open: p.mid, high: p.mid, low: p.mid, close: p.mid};
+                                    lwSeries2.update(lastLwCandle2);
+                                } else {
+                                    lastLwCandle2.close = p.mid;
+                                    lastLwCandle2.high = Math.max(lastLwCandle2.high, p.mid);
+                                    lastLwCandle2.low = Math.min(lastLwCandle2.low, p.mid);
+                                    lwSeries2.update(lastLwCandle2);
+                                }
+                            }
                         }
                     }
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error('Error pollPrices:', e);
+            showToast('Price feed error, retrying...', 'error');
+        }
     }
 
     function switchAccount(accountId) {
@@ -931,11 +939,43 @@
                 localLastCandle = hcData[hcData.length - 1];
             }
             
+            // IST offset: +5:30 = 19800 seconds
+            const IST_OFFSET_SECONDS = 19800;
+            
+            // Formatter for x-axis tick marks (bottom of chart)
+            // LightweightCharts v4 tickMarkFormatter receives raw time (seconds) directly
+            function istTickMarkFormatter(time) {
+                const d = new Date((time + IST_OFFSET_SECONDS) * 1000);
+                const h = d.getUTCHours().toString().padStart(2, '0');
+                const m = d.getUTCMinutes().toString().padStart(2, '0');
+                return `${h}:${m}`;
+            }
+            
+            // Formatter for crosshair time label (hover tooltip)
+            // Note: crosshair.timeFormatter receives raw time (seconds)
+            function istTimeFormatter(time) {
+                const d = new Date((time + IST_OFFSET_SECONDS) * 1000);
+                const h = d.getUTCHours().toString().padStart(2, '0');
+                const m = d.getUTCMinutes().toString().padStart(2, '0');
+                return `${h}:${m}`;
+            }
+            
             const chart = LightweightCharts.createChart(lwContainer, {
                 width: lwContainer.clientWidth,
                 height: lwContainer.clientHeight,
                 ...getLightweightChartTheme(),
-                timeScale: { timeVisible: true, secondsVisible: false }
+                timeScale: { 
+                    timeVisible: true, 
+                    secondsVisible: false,
+                    rightOffset: 2,
+                    barSpacing: 8,
+                    minBarSpacing: 4,
+                    tickMarkFormatter: istTickMarkFormatter
+                },
+                localization: {
+                    timeFormatter: istTimeFormatter,
+                    locale: 'en-IN'
+                }
             });
             
             const candleSeries = chart.addCandlestickSeries({
@@ -943,6 +983,7 @@
                 wickUpColor: '#22c55e', wickDownColor: '#ef4444'
             });
             candleSeries.setData(hcData);
+            chart.timeScale().fitContent();
             
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== lwContainer) return;
@@ -1171,7 +1212,7 @@ updateLotUI();
             let options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
             document.getElementById('status-time').innerText = now.toLocaleTimeString('en-US', options);
             
-            // Indian Market Hours: 9:15 AM to 3:30 PM IST (Mon-Fri)
+            // Indian Market Hours: 9:15 AM to 3:40 PM IST (Mon-Fri) [includes Closing Auction Session 15:30-15:40]
             let kolkataTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
             let day = kolkataTime.getDay();
             let hours = kolkataTime.getHours();
